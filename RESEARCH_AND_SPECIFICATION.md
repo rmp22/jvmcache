@@ -335,7 +335,7 @@ Targeted caller compensation and member traversal were benchmarked across increm
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Private Method Body** | `FooService.kt` | 0 | False ABI Fallback (4m 32s) | **1.82 s** | Bypassed | **149x** | 100% ABI Safe |
 | **New Public Method** | `BarRepo.kt` | 0 | False ABI Fallback (4m 32s) | **1.94 s** | Bypassed | **140x** | 100% ABI Safe |
-| **Changed Descriptor** | `AxModel.kt` | 3 files | False ABI Fallback (4m 32s) | **3.65 s** | Bypassed | **74x** | 100% ABI Safe |
+| **Changed Descriptor** | `BazModel.kt` | 3 files | False ABI Fallback (4m 32s) | **3.65 s** | Bypassed | **74x** | 100% ABI Safe |
 | **Widespread Signature** | `CoreUtils.kt` | 74 files | N/A (Ceiling Breached) | N/A | **4m 32s** | 1x (Safe Fallback) | 100% ABI Safe |
 
 #### Validation Insights:

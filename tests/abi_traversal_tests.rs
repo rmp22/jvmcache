@@ -147,18 +147,18 @@ fn test_dependency_graph_boundary_conditions() {
 #[test]
 fn test_targeted_caller_discovery_and_ceiling_defense() {
     let tmp = make_temp_dir("dep_ceiling");
-    let model_src = tmp.join("AxLayoutData.kt");
-    fs::write(&model_src, b"package com.android.systemui\ndata class AxLayoutData(val flag: Int)").unwrap();
+    let model_src = tmp.join("FooModel.kt");
+    fs::write(&model_src, b"package com.example.model\ndata class FooModel(val flag: Int)").unwrap();
 
     let mut sources = vec![model_src.clone()];
     for i in 0..12 {
-        let caller = tmp.join(format!("TileLayoutConsumer_{}.kt", i));
-        fs::write(&caller, format!("import com.android.systemui.AxLayoutData\nval x_{} : AxLayoutData? = null", i).as_bytes()).unwrap();
+        let caller = tmp.join(format!("BarConsumer_{}.kt", i));
+        fs::write(&caller, format!("import com.example.model.FooModel\nval x_{} : FooModel? = null", i).as_bytes()).unwrap();
         sources.push(caller);
     }
 
     let mut symbols = HashSet::new();
-    symbols.insert("AxLayoutData".to_string());
+    symbols.insert("FooModel".to_string());
 
     let callers_limited = DependencyGraph::find_affected_callers(&sources, &[model_src.clone()], &symbols, 5);
     assert!(callers_limited.is_none());
