@@ -3,8 +3,9 @@ use crate::config::JvmCacheConfig;
 use crate::constants::{
     COMPILER_ERROR_MARKER, EXT_JAVA, EXT_KT, EXT_KOTLIN_MODULE, KAPT_ERROR_NON_EXISTENT_CLASS,
     KAPT_ERROR_OBJECT_ANNOTATION, KAPT_ERROR_UNRESOLVED_MARKER, KAPT_PACKAGE_JVM_FUNCTIONS,
-    MAX_DELTA_DELETED_FILES, MAX_DELTA_MODIFIED_FILES, TAG_ABI_HEADERS, TAG_KAPT_STUBS,
+    MAX_DELTA_DELETED_FILES, MAX_DELTA_MODIFIED_FILES, TAG_KAPT_STUBS,
 };
+use crate::dependency_graph::DependencyGraph;
 use crate::domain::{CompilerKind, CompilerTraits, JvmCacheError, Manifest, ModuleBaseline, ParsedArgs};
 use crate::storage::CacheStorage;
 use crate::telemetry::TelemetryLogger;
@@ -149,33 +150,37 @@ impl DeltaPipeline {
             let _ = io::stdout().write_all(delta_result.stdout.as_bytes());
             let _ = io::stderr().write_all(delta_result.stderr.as_bytes());
 
-            if delta_result.exit_code == 0 {
-                let abi_changed = delta_result.artifacts.iter().any(|a| {
-                    if a.target_tag != TAG_ABI_HEADERS || a.rel_path.to_string_lossy().contains('$') {
-                        return false;
+            let mut final_result = delta_result;
+            if final_result.exit_code == 0 {
+                final_result = match DependencyGraph::resolve_targeted_expansion(
+                    parsed,
+                    storage,
+                    &baseline_manifest,
+                    config,
+                    primary_classes_dir,
+                    delta_sources_to_compile,
+                    final_result,
+                )? {
+                    Some(res) => res,
+                    None => {
+                        return Ok(Self::skip(
+                            config,
+                            parsed,
+                            target_label,
+                            "abi mutation fallback",
+                            "callers recompile failed or exceeded ceiling",
+                        ));
                     }
-                    match baseline_manifest.artifacts.iter().find(|ba| {
-                        ba.target_tag == a.target_tag && ba.rel_path == a.rel_path
-                    }) {
-                        Some(ba) => ba.sha256 != a.sha256,
-                        None => false,
-                    }
-                });
+                };
 
-                if abi_changed && delta_sources_to_compile.len() < parsed.source_files.len() {
-                    return Ok(Self::skip(config, parsed, target_label, "abi changed", "fallback to full"));
-                }
-
-                if parsed.compiler == CompilerKind::Kapt
-                    && delta_result.artifacts.iter().any(|a| a.target_tag == TAG_KAPT_STUBS && parsed.output_dirs.iter().find(|d| d.tag == TAG_KAPT_STUBS).is_some_and(|d| Self::is_invalid_kapt_stub(&d.path.join(&a.rel_path))))
-                {
+                if parsed.compiler == CompilerKind::Kapt && final_result.artifacts.iter().any(|a| a.target_tag == TAG_KAPT_STUBS && parsed.output_dirs.iter().find(|d| d.tag == TAG_KAPT_STUBS).is_some_and(|d| Self::is_invalid_kapt_stub(&d.path.join(&a.rel_path)))) {
                     return Ok(Self::skip(config, parsed, target_label, "invalid kapt stub", "unresolved symbols; fallback to full"));
                 }
 
                 let exec_time = t_exec_start.elapsed();
                 let is_partial = delta_sources_to_compile.len() < parsed.source_files.len();
 
-                for art in delta_result.artifacts {
+                for art in final_result.artifacts {
                     let is_mod = art.rel_path.extension().and_then(|e| e.to_str()) == Some(EXT_KOTLIN_MODULE);
                     let k = format!("{}:{}", art.target_tag, art.rel_path.to_string_lossy());
                     if is_mod && is_partial && composite_map.get(&k).is_some_and(|ex| ex.size_bytes > art.size_bytes) {
@@ -184,32 +189,28 @@ impl DeltaPipeline {
                     composite_map.insert(k, art);
                 }
 
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                    let manifest = Manifest {
-                        cache_key: key.to_string(),
-                        compiler_kind: parsed.compiler,
-                        compiler_version: compiler_version.to_string(),
-                        created_at_epoch_secs: now,
-                        exit_code: 0,
-                        stdout: delta_result.stdout,
-                        stderr: delta_result.stderr,
-                        artifacts: composite_map.into_values().collect(),
-                    };
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let manifest = Manifest {
+                    cache_key: key.to_string(), compiler_kind: parsed.compiler,
+                    compiler_version: compiler_version.to_string(), created_at_epoch_secs: now,
+                    exit_code: 0, stdout: final_result.stdout, stderr: final_result.stderr,
+                    artifacts: composite_map.into_values().collect(),
+                };
 
-                    let t_store_start = Instant::now();
-                    let _ = storage.store(&manifest, &parsed.output_dirs);
-                    Self::save_delta_baseline(storage, parsed, module_key, key, primary_classes_dir, classpath_hash, source_hashes);
+                let t_store_start = Instant::now();
+                let _ = storage.store(&manifest, &parsed.output_dirs);
+                Self::save_delta_baseline(storage, parsed, module_key, key, primary_classes_dir, classpath_hash, source_hashes);
 
-                    TelemetryLogger::log_delta_hit(
-                        &config.cache_dir, parsed.compiler, target_label, key,
-                        delta_sources_to_compile.len(), parsed.source_files.len(), manifest.artifacts.len(),
-                        t_start.elapsed(), restore_time, exec_time, t_store_start.elapsed(),
-                    );
+                TelemetryLogger::log_delta_hit(
+                    &config.cache_dir, parsed.compiler, target_label, key,
+                    delta_sources_to_compile.len(), parsed.source_files.len(), manifest.artifacts.len(),
+                    t_start.elapsed(), restore_time, exec_time, t_store_start.elapsed(),
+                );
 
-                    return Ok(Some(0));
-            } else if delta_result.stdout.contains(COMPILER_ERROR_MARKER) || delta_result.stderr.contains(COMPILER_ERROR_MARKER) {
-                TelemetryLogger::log_failure(&config.cache_dir, parsed.compiler, target_label, key, delta_result.exit_code, t_start.elapsed());
-                return Ok(Some(delta_result.exit_code));
+                return Ok(Some(0));
+            } else if final_result.stdout.contains(COMPILER_ERROR_MARKER) || final_result.stderr.contains(COMPILER_ERROR_MARKER) {
+                TelemetryLogger::log_failure(&config.cache_dir, parsed.compiler, target_label, key, final_result.exit_code, t_start.elapsed());
+                return Ok(Some(final_result.exit_code));
             }
         }
 
@@ -218,10 +219,8 @@ impl DeltaPipeline {
 
     fn save_delta_baseline(storage: &CacheStorage, parsed: &ParsedArgs, module_key: &str, key: &str, dir: &Path, cp_hash: &str, srcs: &HashMap<PathBuf, String>) {
         let _ = storage.save_baseline(&ModuleBaseline {
-            module_key: module_key.to_string(), compiler_kind: parsed.compiler,
-            last_cache_key: key.to_string(), classes_dir: dir.to_path_buf(),
-            classpath_hash: cp_hash.to_string(), semantic_flags: parsed.semantic_flags.clone(),
-            source_hashes: srcs.clone(),
+            module_key: module_key.to_string(), compiler_kind: parsed.compiler, last_cache_key: key.to_string(),
+            classes_dir: dir.to_path_buf(), classpath_hash: cp_hash.to_string(), semantic_flags: parsed.semantic_flags.clone(), source_hashes: srcs.clone(),
         });
     }
 

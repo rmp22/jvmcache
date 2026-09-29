@@ -45,6 +45,7 @@ pub const MAX_ACTIVITY_LOG_BYTES: u64 = 20 * 1024 * 1024;
 
 pub const MAX_DELTA_MODIFIED_FILES: usize = 50;
 pub const MAX_DELTA_DELETED_FILES: usize = 20;
+pub const MAX_TARGETED_CALLERS: usize = 50;
 
 pub const HASH_BUFFER_SIZE: usize = 65536;
 pub const PARALLEL_HASH_MIN_FILES: usize = 4;

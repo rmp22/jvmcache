@@ -1,5 +1,5 @@
 use crate::constants::{
-    DEFAULT_MAX_CACHE_SIZE_MB, DIR_OBJECTS, FILE_FINGERPRINTS, FILE_STATS,
+    DEFAULT_MAX_CACHE_SIZE_MB, DIR_OBJECTS, FILE_FINGERPRINTS, FILE_STATS, MAX_TARGETED_CALLERS,
 };
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -39,6 +39,7 @@ pub struct JvmCacheConfig {
     pub flags_enabled: bool,
     pub kotlinc_threads: usize,
     pub strict_abi: bool,
+    pub max_targeted_callers: usize,
     pub config_file_path: Option<PathBuf>,
 }
 
@@ -95,6 +96,10 @@ impl JvmCacheConfig {
         let cds_enabled = Self::env_bool("JVMCACHE_CDS", file_model.cds_enabled, true);
         let flags_enabled = Self::env_bool("JVMCACHE_AUTO_FLAGS", file_model.flags_enabled, true);
         let strict_abi = Self::env_bool("JVMCACHE_STRICT_ABI", None, false);
+        let max_targeted_callers = env::var("JVMCACHE_MAX_TARGETED_CALLERS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(MAX_TARGETED_CALLERS);
 
         let kotlinc_threads = env::var("JVMCACHE_KOTLINC_THREADS")
             .ok()
@@ -117,6 +122,7 @@ impl JvmCacheConfig {
             flags_enabled,
             kotlinc_threads,
             strict_abi,
+            max_targeted_callers,
             config_file_path: file_path,
         }
     }
